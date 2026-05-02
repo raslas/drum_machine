@@ -1,0 +1,32 @@
+● Here are the absolute must-dos for auth in Supabase on your first project:
+                                                                                                                 ---                                                                                                            1. Site URL + Redirect URLs (you're doing this now)                                                          
+  Set your production URL and localhost in Authentication → URL Configuration. Without this, email confirmation
+   links break.
+
+  2. Email confirmation is ON by default — understand it
+  Go to Authentication → Providers → Email. "Confirm email" is enabled. This means users must click the link in
+   their inbox before they can sign in. Good for production, annoying for testing. You can temporarily disable 
+  it during dev.
+
+  3. Protect every table with RLS
+  You did this already. The rule: if a table has no RLS policy, it's either fully open or fully blocked. Always
+   enable RLS + add a policy before you put real data in a table.
+
+  4. Never expose your service_role key
+  In Project Settings → API you have two keys — anon (safe for frontend) and service_role (bypasses all RLS,   
+  admin-level). Never put service_role in your frontend or commit it anywhere.
+
+  5. Environment variables in Vercel
+  NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY must be added manually in Vercel → Settings →     
+  Environment Variables. They are never in git. You already hit this one.
+
+  6. Auth emails come from Supabase's domain by default
+  For a real product you'd configure a custom SMTP sender (Authentication → SMTP Settings) so emails don't land
+   in spam. Fine to skip for now.
+
+  7. Set password minimum length
+  Authentication → Providers → Email → Minimum password length. Default is 6. Consider 8+ for anything public. 
+
+  ---
+  The three that bite beginners most: #1 (redirect URLs), #3 (forgot RLS), and #4 (leaked service_role key).   
+  You're already covered on all three.
