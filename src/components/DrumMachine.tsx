@@ -5,6 +5,7 @@ import { INSTRUMENTS, STEPS } from '@/lib/instruments'
 import { playSound } from '@/lib/sounds'
 import { useAudio } from '@/hooks/useAudio'
 import { useSequencer } from '@/hooks/useSequencer'
+import { useAuth } from '@/hooks/useAuth'
 import {
   loadPatterns,
   savePattern,
@@ -13,17 +14,35 @@ import {
   saveSong,
   exportBundle,
   importBundle,
+  clearLocalPatterns,
   emptySeqState,
   type SavedPattern,
 } from '@/lib/patternStore'
+import {
+  fetchPatterns,
+  upsertPattern,
+  removePattern,
+  fetchSong,
+  upsertSong,
+} from '@/lib/supabaseStore'
 import PadGrid from './PadGrid'
 import Sequencer from './Sequencer'
 import Transport from './Transport'
 import PatternManager from './PatternManager'
 import SongMode from './SongMode'
+import AuthModal from './AuthModal'
+import UserBar from './UserBar'
 
 export default function DrumMachine() {
   const { getCtx, ctxRef } = useAudio()
+  const { user, loading: authLoading } = useAuth()
+
+  // ── Auth UI ──────────────────────────────────────────────────────────────
+  const [showAuthModal, setShowAuthModal]     = useState(false)
+  const [syncing, setSyncing]                 = useState(false)
+  const [localPatternCount, setLocalPatternCount] = useState(0)
+  const userRef = useRef(user)
+  useEffect(() => { userRef.current = user }, [user])
 
   // ── Sequencer state ──────────────────────────────────────────────────────
   const [seqState, setSeqState] = useState<boolean[][]>(
@@ -47,11 +66,10 @@ export default function DrumMachine() {
   }, [])
 
   // ── Transport ────────────────────────────────────────────────────────────
-  const [isPlaying, setIsPlaying] = useState(false)
-  const [bpm, setBpm] = useState(120)
+  const [isPlaying, setIsPlaying]   = useState(false)
+  const [bpm, setBpm]               = useState(120)
   const [activeStep, setActiveStep] = useState(-1)
 
-  // bpmRef lives here so song mode can update it immediately without waiting for re-render
   const bpmRef = useRef(bpm)
   const setBpmWithRef = useCallback((val: number) => {
     bpmRef.current = val
@@ -59,50 +77,126 @@ export default function DrumMachine() {
   }, [])
 
   // ── Pattern library ──────────────────────────────────────────────────────
-  const [savedPatterns, setSavedPatterns] = useState<SavedPattern[]>([])
-  const [currentPatternId, setCurrentPatternId] = useState<string | null>(null)
+  const [savedPatterns, setSavedPatterns]         = useState<SavedPattern[]>([])
+  const [currentPatternId, setCurrentPatternId]   = useState<string | null>(null)
   const [currentPatternName, setCurrentPatternName] = useState('Pattern 1')
-
-  // Refs for use inside scheduler callbacks (avoid stale closures)
   const savedPatternsRef = useRef<SavedPattern[]>([])
-
-  useEffect(() => {
-    const patterns = loadPatterns()
-    const song = loadSong()
-    setSavedPatterns(patterns)
-    savedPatternsRef.current = patterns
-    setSongArrangement(song.patternIds)
-    songArrangementRef.current = song.patternIds
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
   useEffect(() => { savedPatternsRef.current = savedPatterns }, [savedPatterns])
 
-  const refreshPatterns = useCallback(() => {
-    const patterns = loadPatterns()
-    setSavedPatterns(patterns)
-    savedPatternsRef.current = patterns
+  // ── Song mode ────────────────────────────────────────────────────────────
+  const [songMode, setSongMode]               = useState(false)
+  const [songArrangement, setSongArrangement] = useState<string[]>([])
+  const [currentSongIdx, setCurrentSongIdx]   = useState(0)
+  const songModeRef        = useRef(false)
+  const songArrangementRef = useRef<string[]>([])
+  const currentSongIdxRef  = useRef(0)
+  useEffect(() => { songModeRef.current = songMode },                [songMode])
+  useEffect(() => { songArrangementRef.current = songArrangement }, [songArrangement])
+  useEffect(() => { currentSongIdxRef.current = currentSongIdx },   [currentSongIdx])
+
+  // ── Load data when auth state changes ────────────────────────────────────
+  const refreshPatterns = useCallback(async () => {
+    const u = userRef.current
+    if (u) {
+      const patterns = await fetchPatterns(u.id)
+      setSavedPatterns(patterns)
+      savedPatternsRef.current = patterns
+    } else {
+      const patterns = loadPatterns()
+      setSavedPatterns(patterns)
+      savedPatternsRef.current = patterns
+    }
   }, [])
 
-  const handleSavePattern = useCallback(() => {
-    if (!currentPatternId) return
-    const pattern: SavedPattern = {
-      id: currentPatternId,
-      name: currentPatternName,
-      bpm,
-      seqState,
+  useEffect(() => {
+    if (authLoading) return
+
+    async function loadData() {
+      const u = user
+      if (u) {
+        try {
+          const [patterns, song] = await Promise.all([fetchPatterns(u.id), fetchSong(u.id)])
+          setSavedPatterns(patterns)
+          savedPatternsRef.current = patterns
+          setSongArrangement(song.patternIds)
+          songArrangementRef.current = song.patternIds
+          // Check for local patterns that haven't been migrated yet
+          setLocalPatternCount(loadPatterns().length)
+        } catch (err) {
+          console.error('Failed to load from Supabase:', err)
+        }
+      } else {
+        const patterns = loadPatterns()
+        const song     = loadSong()
+        setSavedPatterns(patterns)
+        savedPatternsRef.current = patterns
+        setSongArrangement(song.patternIds)
+        songArrangementRef.current = song.patternIds
+        setLocalPatternCount(0)
+      }
     }
-    savePattern(pattern)
-    refreshPatterns()
+
+    loadData()
+  }, [user, authLoading])
+
+  // ── Migrate local patterns to Supabase ───────────────────────────────────
+  const handleImportLocal = useCallback(async () => {
+    const u = userRef.current
+    if (!u) return
+    const local = loadPatterns()
+    if (local.length === 0) return
+    setSyncing(true)
+    try {
+      await Promise.all(local.map(p => upsertPattern(u.id, p)))
+      clearLocalPatterns()
+      setLocalPatternCount(0)
+      await refreshPatterns()
+    } catch (err) {
+      console.error('Failed to import local patterns:', err)
+    } finally {
+      setSyncing(false)
+    }
+  }, [refreshPatterns])
+
+  // ── Save song arrangement (localStorage + cloud) ─────────────────────────
+  const persistSong = useCallback((patternIds: string[]) => {
+    saveSong({ patternIds })
+    songArrangementRef.current = patternIds
+    const u = userRef.current
+    if (u) upsertSong(u.id, { patternIds }).catch(console.error)
+  }, [])
+
+  // ── Pattern CRUD ─────────────────────────────────────────────────────────
+  const handleSavePattern = useCallback(async () => {
+    if (!currentPatternId) return
+    const pattern: SavedPattern = { id: currentPatternId, name: currentPatternName, bpm, seqState }
+    const u = userRef.current
+    if (u) {
+      setSyncing(true)
+      try { await upsertPattern(u.id, pattern) }
+      catch (err) { console.error('Failed to save pattern:', err) }
+      finally { setSyncing(false) }
+    } else {
+      savePattern(pattern)
+    }
+    await refreshPatterns()
   }, [currentPatternId, currentPatternName, bpm, seqState, refreshPatterns])
 
-  const handleSaveAs = useCallback((name: string) => {
+  const handleSaveAs = useCallback(async (name: string) => {
     const id = crypto.randomUUID()
     const pattern: SavedPattern = { id, name, bpm, seqState }
-    savePattern(pattern)
+    const u = userRef.current
+    if (u) {
+      setSyncing(true)
+      try { await upsertPattern(u.id, pattern) }
+      catch (err) { console.error('Failed to save pattern:', err) }
+      finally { setSyncing(false) }
+    } else {
+      savePattern(pattern)
+    }
     setCurrentPatternId(id)
     setCurrentPatternName(name)
-    refreshPatterns()
+    await refreshPatterns()
   }, [bpm, seqState, refreshPatterns])
 
   const handleLoadPattern = useCallback((pattern: SavedPattern) => {
@@ -113,116 +207,116 @@ export default function DrumMachine() {
     setCurrentPatternId(pattern.id)
   }, [setBpmWithRef])
 
-  const handleDeletePattern = useCallback((id: string) => {
-    deletePattern(id)
-    refreshPatterns()
-    // Remove from song arrangement
+  const handleDeletePattern = useCallback(async (id: string) => {
+    const u = userRef.current
+    if (u) {
+      setSyncing(true)
+      try { await removePattern(id) }
+      catch (err) { console.error('Failed to delete pattern:', err) }
+      finally { setSyncing(false) }
+    } else {
+      deletePattern(id)
+    }
+    await refreshPatterns()
     setSongArrangement(prev => {
       const next = prev.filter(pid => pid !== id)
-      saveSong({ patternIds: next })
-      songArrangementRef.current = next
+      persistSong(next)
       return next
     })
     if (currentPatternId === id) setCurrentPatternId(null)
-  }, [currentPatternId, refreshPatterns])
+  }, [currentPatternId, refreshPatterns, persistSong])
 
   // ── Export / Import ──────────────────────────────────────────────────────
   const handleExport = useCallback(() => {
     exportBundle(savedPatternsRef.current, { patternIds: songArrangementRef.current })
   }, [])
 
-  const handleImport = useCallback((json: string) => {
+  const handleImport = useCallback(async (json: string) => {
     const bundle = importBundle(json)
-    if (!bundle) {
-      alert('Invalid file — could not import.')
-      return
+    if (!bundle) { alert('Invalid file — could not import.'); return }
+
+    const u = userRef.current
+    if (u) {
+      setSyncing(true)
+      try {
+        await Promise.all(bundle.patterns.map(p => upsertPattern(u.id, p)))
+        const current = await fetchSong(u.id)
+        const merged  = [...new Set([...current.patternIds, ...bundle.song.patternIds])]
+        await upsertSong(u.id, { patternIds: merged })
+        setSongArrangement(merged)
+        songArrangementRef.current = merged
+      } catch (err) {
+        console.error('Failed to import:', err)
+      } finally {
+        setSyncing(false)
+      }
+    } else {
+      bundle.patterns.forEach(p => savePattern(p))
+      setSongArrangement(prev => {
+        const merged = [...new Set([...prev, ...bundle.song.patternIds])]
+        persistSong(merged)
+        return merged
+      })
     }
-    bundle.patterns.forEach(p => savePattern(p))
-    refreshPatterns()
-    setSongArrangement(prev => {
-      const merged = [...new Set([...prev, ...bundle.song.patternIds])]
-      saveSong({ patternIds: merged })
-      songArrangementRef.current = merged
-      return merged
-    })
-  }, [refreshPatterns])
+    await refreshPatterns()
+  }, [refreshPatterns, persistSong])
 
-  // ── Song mode ────────────────────────────────────────────────────────────
-  const [songMode, setSongMode] = useState(false)
-  const [songArrangement, setSongArrangement] = useState<string[]>([])
-  const [currentSongIdx, setCurrentSongIdx] = useState(0)
-
-  const songModeRef         = useRef(false)
-  const songArrangementRef  = useRef<string[]>([])
-  const currentSongIdxRef   = useRef(0)
-
-  useEffect(() => { songModeRef.current = songMode },           [songMode])
-  useEffect(() => { songArrangementRef.current = songArrangement }, [songArrangement])
-  useEffect(() => { currentSongIdxRef.current = currentSongIdx }, [currentSongIdx])
-
+  // ── Song arrangement ─────────────────────────────────────────────────────
   const handleAddToSong = useCallback((patternId: string) => {
     setSongArrangement(prev => {
       const next = [...prev, patternId]
-      saveSong({ patternIds: next })
-      songArrangementRef.current = next
+      persistSong(next)
       return next
     })
-  }, [])
+  }, [persistSong])
 
   const handleRemoveFromSong = useCallback((index: number) => {
     setSongArrangement(prev => {
       const next = prev.filter((_, i) => i !== index)
-      saveSong({ patternIds: next })
-      songArrangementRef.current = next
+      persistSong(next)
       return next
     })
-  }, [])
+  }, [persistSong])
 
   const handleMoveUp = useCallback((index: number) => {
     if (index === 0) return
     setSongArrangement(prev => {
       const next = [...prev]
       ;[next[index - 1], next[index]] = [next[index], next[index - 1]]
-      saveSong({ patternIds: next })
-      songArrangementRef.current = next
+      persistSong(next)
       return next
     })
-  }, [])
+  }, [persistSong])
 
   const handleMoveDown = useCallback((index: number) => {
     setSongArrangement(prev => {
       if (index >= prev.length - 1) return prev
       const next = [...prev]
       ;[next[index], next[index + 1]] = [next[index + 1], next[index]]
-      saveSong({ patternIds: next })
-      songArrangementRef.current = next
+      persistSong(next)
       return next
     })
-  }, [])
+  }, [persistSong])
 
   const handleClearSong = useCallback(() => {
     setSongArrangement([])
-    songArrangementRef.current = []
-    saveSong({ patternIds: [] })
-  }, [])
+    persistSong([])
+  }, [persistSong])
 
-  // Called by sequencer at the end of each 8-step loop
+  // ── Song mode loop-end: advance to next pattern ──────────────────────────
   const handleLoopEnd = useCallback(() => {
     if (!songModeRef.current) return
     const arr = songArrangementRef.current
     if (arr.length === 0) return
 
     const nextIdx = (currentSongIdxRef.current + 1) % arr.length
-    const nextId  = arr[nextIdx]
-    const pattern = savedPatternsRef.current.find(p => p.id === nextId)
+    const pattern = savedPatternsRef.current.find(p => p.id === arr[nextIdx])
     if (!pattern) return
 
-    // Update refs immediately (synchronous) so sequencer reads new state on next tick
     seqStateRef.current = pattern.seqState
-    bpmRef.current = pattern.bpm
+    bpmRef.current      = pattern.bpm
     currentSongIdxRef.current = nextIdx
 
-    // Schedule React state updates (async — for visual update only)
     setSeqState(pattern.seqState)
     setBpm(pattern.bpm)
     setCurrentSongIdx(nextIdx)
@@ -234,13 +328,12 @@ export default function DrumMachine() {
   const handlePlayStop = useCallback(() => {
     if (!isPlaying) {
       getCtx()
-      // In song mode, load the first arrangement pattern before starting
       if (songModeRef.current && songArrangementRef.current.length > 0) {
         const firstId      = songArrangementRef.current[0]
         const firstPattern = savedPatternsRef.current.find(p => p.id === firstId)
         if (firstPattern) {
-          seqStateRef.current = firstPattern.seqState
-          bpmRef.current = firstPattern.bpm
+          seqStateRef.current       = firstPattern.seqState
+          bpmRef.current            = firstPattern.bpm
           currentSongIdxRef.current = 0
           setSeqState(firstPattern.seqState)
           setBpm(firstPattern.bpm)
@@ -273,6 +366,9 @@ export default function DrumMachine() {
   // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="w-full max-w-3xl flex flex-col gap-6">
+      {/* Auth modal */}
+      {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} />}
+
       {/* Header */}
       <header className="text-center select-none">
         <h1
@@ -290,6 +386,15 @@ export default function DrumMachine() {
           Web Audio Synthesizer
         </p>
       </header>
+
+      {/* User bar */}
+      <UserBar
+        user={user}
+        syncing={syncing}
+        localPatternCount={localPatternCount}
+        onShowAuth={() => setShowAuthModal(true)}
+        onImportLocal={handleImportLocal}
+      />
 
       {/* Pad grid */}
       <PadGrid instruments={INSTRUMENTS} onPlay={handlePadPlay} />

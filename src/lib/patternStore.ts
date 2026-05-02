@@ -73,6 +73,10 @@ export function exportBundle(patterns: SavedPattern[], song: SongData): void {
   URL.revokeObjectURL(url)
 }
 
+export function clearLocalPatterns(): void {
+  localStorage.removeItem(PATTERNS_KEY)
+}
+
 export function importBundle(json: string): ExportBundle | null {
   try {
     const data = JSON.parse(json) as ExportBundle
