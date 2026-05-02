@@ -11,8 +11,7 @@ export function useAudio() {
    */
   const getCtx = useCallback((): AudioContext => {
     if (!ctxRef.current) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const AC = window.AudioContext ?? (window as any).webkitAudioContext
+      const AC = window.AudioContext ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
       ctxRef.current = new AC()
     }
     if (ctxRef.current.state === 'suspended') {
