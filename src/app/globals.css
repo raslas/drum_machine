@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Custom animation utilities ─────────────────────────────────────────── */
+@layer utilities {
+  .animate-pad-flash {
+    animation: pad-flash 0.22s ease-out forwards;
+  }
+  .animate-ripple {
+    animation: ripple-expand 0.45s ease-out forwards;
+  }
+}
+
+@keyframes pad-flash {
+  0% {
+    filter: brightness(3) saturate(1.5);
+    box-shadow: 0 0 40px 16px var(--pad-glow, rgba(255, 255, 255, 0.4));
+  }
+  100% {
+    filter: brightness(1) saturate(1);
+    box-shadow: none;
+  }
+}
+
+@keyframes ripple-expand {
+  from {
+    transform: scale(0);
+    opacity: 0.55;
+  }
+  to {
+    transform: scale(8);
+    opacity: 0;
+  }
+}
+
+/* ── Base ────────────────────────────────────────────────────────────────── */
+html,
+body {
+  background: #06060f;
+  color: #ffffff;
+}
+
+/* Hide number input arrows */
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+}
+
+/* Custom range slider */
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 4px;
+  background: #222244;
+  outline: none;
+  cursor: pointer;
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #00ffcc;
+  cursor: pointer;
+  box-shadow: 0 0 6px #00ffcc88;
+}
+
+input[type='range']::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #00ffcc;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 0 6px #00ffcc88;
+}
