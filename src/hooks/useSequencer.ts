@@ -8,32 +8,33 @@ import type { Instrument } from '@/lib/instruments'
 interface UseSequencerProps {
   ctxRef: MutableRefObject<AudioContext | null>
   seqStateRef: MutableRefObject<boolean[][]>
+  bpmRef: MutableRefObject<number>
   instruments: Instrument[]
-  bpm: number
   isPlaying: boolean
   onStepChange: (step: number) => void
+  onLoopEnd?: () => void
 }
 
-const LOOKAHEAD_SEC = 0.1 // seconds ahead to schedule audio
-const TICK_MS = 25        // scheduler poll interval
+const LOOKAHEAD_SEC = 0.1
+const TICK_MS = 25
 
 export function useSequencer({
   ctxRef,
   seqStateRef,
+  bpmRef,
   instruments,
-  bpm,
   isPlaying,
   onStepChange,
+  onLoopEnd,
 }: UseSequencerProps) {
-  // Refs keep values fresh inside the scheduler closure without causing re-renders
-  const bpmRef       = useRef(bpm)
-  const onStepRef    = useRef(onStepChange)
-  const stepRef      = useRef(0)
-  const nextTimeRef  = useRef(0)
-  const timerRef     = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const onStepRef   = useRef(onStepChange)
+  const onLoopRef   = useRef(onLoopEnd)
+  const stepRef     = useRef(0)
+  const nextTimeRef = useRef(0)
+  const timerRef    = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  useEffect(() => { bpmRef.current = bpm },            [bpm])
-  useEffect(() => { onStepRef.current = onStepChange }, [onStepChange])
+  useEffect(() => { onStepRef.current  = onStepChange }, [onStepChange])
+  useEffect(() => { onLoopRef.current  = onLoopEnd },    [onLoopEnd])
 
   useEffect(() => {
     if (!isPlaying) return
@@ -41,8 +42,7 @@ export function useSequencer({
     const ctx = ctxRef.current
     if (!ctx) return
 
-    // Reset position
-    stepRef.current    = 0
+    stepRef.current     = 0
     nextTimeRef.current = ctx.currentTime
 
     const tick = () => {
@@ -52,16 +52,20 @@ export function useSequencer({
         const step = stepRef.current
         const t    = nextTimeRef.current
 
-        // Schedule audio for each active instrument
         instruments.forEach((inst, i) => {
           if (seqStateRef.current[i]?.[step]) {
             playSound(inst.id, ctx, t)
           }
         })
 
-        // Fire visual update just before the beat sounds
         const msDelay = Math.max(0, (t - ctx.currentTime) * 1000 - 15)
         setTimeout(() => onStepRef.current(step), msDelay)
+
+        // Signal end-of-loop synchronously so song mode can swap seqStateRef
+        // before the next iteration schedules step 0
+        if (step === 7) {
+          onLoopRef.current?.()
+        }
 
         nextTimeRef.current += secPerStep
         stepRef.current = (stepRef.current + 1) % 8
@@ -74,7 +78,7 @@ export function useSequencer({
 
     return () => {
       if (timerRef.current !== null) clearTimeout(timerRef.current)
-      onStepRef.current(-1) // clear playhead on stop
+      onStepRef.current(-1)
     }
-  }, [isPlaying, ctxRef, instruments, seqStateRef])
+  }, [isPlaying, ctxRef, instruments, seqStateRef, bpmRef])
 }
