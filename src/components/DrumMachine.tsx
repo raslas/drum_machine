@@ -3,6 +3,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { INSTRUMENTS, STEPS } from '@/lib/instruments'
 import { playSound } from '@/lib/sounds'
+import { startSynthVoice } from '@/lib/synth'
+import { DEFAULT_SYNTH_WAVE, type MelodyState, type SynthWaveform } from '@/lib/melody'
 import { useAudio } from '@/hooks/useAudio'
 import { useSequencer } from '@/hooks/useSequencer'
 import { useAuth } from '@/hooks/useAuth'
@@ -16,6 +18,7 @@ import {
   importBundle,
   clearLocalPatterns,
   emptySeqState,
+  emptyPatternMelody,
   type SavedPattern,
 } from '@/lib/patternStore'
 import {
@@ -32,6 +35,7 @@ import PatternManager from './PatternManager'
 import SongMode from './SongMode'
 import AuthModal from './AuthModal'
 import UserBar from './UserBar'
+import PianoKeyboard from './PianoKeyboard'
 
 export default function DrumMachine() {
   const { getCtx, ctxRef } = useAudio()
@@ -49,6 +53,17 @@ export default function DrumMachine() {
     () => INSTRUMENTS.map(() => new Array(STEPS).fill(false))
   )
   const seqStateRef = useRef<boolean[][]>(seqState)
+  const [melodyState, setMelodyState] = useState<MelodyState>(() => emptyPatternMelody())
+  const melodyStateRef = useRef<MelodyState>(melodyState)
+  const [synthWave, setSynthWave] = useState<SynthWaveform>(DEFAULT_SYNTH_WAVE)
+  const synthWaveRef = useRef<SynthWaveform>(synthWave)
+  const [melodyRecording, setMelodyRecording] = useState(false)
+  const [selectedMelodyStep, setSelectedMelodyStep] = useState(0)
+
+  const setSynthWaveWithRef = useCallback((wave: SynthWaveform) => {
+    synthWaveRef.current = wave
+    setSynthWave(wave)
+  }, [])
 
   const handleToggle = useCallback((instIdx: number, step: number) => {
     setSeqState(prev => {
@@ -61,19 +76,29 @@ export default function DrumMachine() {
 
   const handleClear = useCallback(() => {
     const cleared = emptySeqState()
+    const clearMelody = emptyPatternMelody()
     setSeqState(cleared)
     seqStateRef.current = cleared
+    setMelodyState(clearMelody)
+    melodyStateRef.current = clearMelody
+    setSelectedMelodyStep(0)
   }, [])
 
   // ── Transport ────────────────────────────────────────────────────────────
   const [isPlaying, setIsPlaying]   = useState(false)
   const [bpm, setBpm]               = useState(120)
   const [activeStep, setActiveStep] = useState(-1)
+  const activeStepRef = useRef(-1)
 
   const bpmRef = useRef(bpm)
   const setBpmWithRef = useCallback((val: number) => {
     bpmRef.current = val
     setBpm(val)
+  }, [])
+
+  const setActiveStepWithRef = useCallback((step: number) => {
+    activeStepRef.current = step
+    setActiveStep(step)
   }, [])
 
   // ── Pattern library ──────────────────────────────────────────────────────
@@ -169,7 +194,14 @@ export default function DrumMachine() {
   // ── Pattern CRUD ─────────────────────────────────────────────────────────
   const handleSavePattern = useCallback(async () => {
     if (!currentPatternId) return
-    const pattern: SavedPattern = { id: currentPatternId, name: currentPatternName, bpm, seqState }
+    const pattern: SavedPattern = {
+      id: currentPatternId,
+      name: currentPatternName,
+      bpm,
+      seqState,
+      melodyState,
+      synthWave,
+    }
     const u = userRef.current
     if (u) {
       setSyncing(true)
@@ -180,11 +212,11 @@ export default function DrumMachine() {
       savePattern(pattern)
     }
     await refreshPatterns()
-  }, [currentPatternId, currentPatternName, bpm, seqState, refreshPatterns])
+  }, [currentPatternId, currentPatternName, bpm, seqState, melodyState, synthWave, refreshPatterns])
 
   const handleSaveAs = useCallback(async (name: string) => {
     const id = crypto.randomUUID()
-    const pattern: SavedPattern = { id, name, bpm, seqState }
+    const pattern: SavedPattern = { id, name, bpm, seqState, melodyState, synthWave }
     const u = userRef.current
     if (u) {
       setSyncing(true)
@@ -197,15 +229,18 @@ export default function DrumMachine() {
     setCurrentPatternId(id)
     setCurrentPatternName(name)
     await refreshPatterns()
-  }, [bpm, seqState, refreshPatterns])
+  }, [bpm, seqState, melodyState, synthWave, refreshPatterns])
 
   const handleLoadPattern = useCallback((pattern: SavedPattern) => {
     setSeqState(pattern.seqState)
     seqStateRef.current = pattern.seqState
+    setMelodyState(pattern.melodyState)
+    melodyStateRef.current = pattern.melodyState
+    setSynthWaveWithRef(pattern.synthWave)
     setBpmWithRef(pattern.bpm)
     setCurrentPatternName(pattern.name)
     setCurrentPatternId(pattern.id)
-  }, [setBpmWithRef])
+  }, [setBpmWithRef, setSynthWaveWithRef])
 
   const handleDeletePattern = useCallback(async (id: string) => {
     const u = userRef.current
@@ -314,10 +349,14 @@ export default function DrumMachine() {
     if (!pattern) return
 
     seqStateRef.current = pattern.seqState
+    melodyStateRef.current = pattern.melodyState
+    synthWaveRef.current   = pattern.synthWave
     bpmRef.current      = pattern.bpm
     currentSongIdxRef.current = nextIdx
 
     setSeqState(pattern.seqState)
+    setMelodyState(pattern.melodyState)
+    setSynthWave(pattern.synthWave)
     setBpm(pattern.bpm)
     setCurrentSongIdx(nextIdx)
     setCurrentPatternId(pattern.id)
@@ -333,9 +372,13 @@ export default function DrumMachine() {
         const firstPattern = savedPatternsRef.current.find(p => p.id === firstId)
         if (firstPattern) {
           seqStateRef.current       = firstPattern.seqState
+          melodyStateRef.current    = firstPattern.melodyState
+          synthWaveRef.current      = firstPattern.synthWave
           bpmRef.current            = firstPattern.bpm
           currentSongIdxRef.current = 0
           setSeqState(firstPattern.seqState)
+          setMelodyState(firstPattern.melodyState)
+          setSynthWave(firstPattern.synthWave)
           setBpm(firstPattern.bpm)
           setCurrentSongIdx(0)
           setCurrentPatternId(firstPattern.id)
@@ -350,10 +393,12 @@ export default function DrumMachine() {
   useSequencer({
     ctxRef,
     seqStateRef,
+    melodyStateRef,
+    synthWaveRef,
     bpmRef,
     instruments: INSTRUMENTS,
     isPlaying,
-    onStepChange: setActiveStep,
+    onStepChange: setActiveStepWithRef,
     onLoopEnd: handleLoopEnd,
   })
 
@@ -362,6 +407,46 @@ export default function DrumMachine() {
     const ctx = getCtx()
     playSound(INSTRUMENTS[instIdx].id, ctx, ctx.currentTime)
   }, [getCtx])
+
+  const recordMelodyNote = useCallback((note: string) => {
+    const step = isPlaying && activeStepRef.current >= 0 ? activeStepRef.current : selectedMelodyStep
+
+    setMelodyState(prev => {
+      const next = [...prev]
+      next[step] = note
+      melodyStateRef.current = next
+      return next
+    })
+
+    if (!isPlaying) {
+      setSelectedMelodyStep((step + 1) % STEPS)
+    }
+  }, [isPlaying, selectedMelodyStep])
+
+  const handleSynthNoteStart = useCallback((note: string) => {
+    const ctx = getCtx()
+    const voice = startSynthVoice(note, synthWaveRef.current, ctx)
+
+    if (melodyRecording) {
+      recordMelodyNote(note)
+    }
+
+    return () => voice.stop()
+  }, [getCtx, melodyRecording, recordMelodyNote])
+
+  const handleMelodyStepClick = useCallback((step: number) => {
+    const note = melodyStateRef.current[step]
+    setSelectedMelodyStep(step)
+
+    if (!note) return
+
+    setMelodyState(prev => {
+      const next = [...prev]
+      next[step] = null
+      melodyStateRef.current = next
+      return next
+    })
+  }, [])
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
@@ -399,6 +484,18 @@ export default function DrumMachine() {
       {/* Pad grid */}
       <PadGrid instruments={INSTRUMENTS} onPlay={handlePadPlay} />
 
+      {/* Melody keyboard */}
+      <PianoKeyboard
+        wave={synthWave}
+        recording={melodyRecording}
+        activeStep={activeStep}
+        selectedStep={selectedMelodyStep}
+        melodyState={melodyState}
+        onWaveChange={setSynthWaveWithRef}
+        onRecordingChange={setMelodyRecording}
+        onNoteStart={handleSynthNoteStart}
+      />
+
       {/* Sequencer card */}
       <section
         className="rounded-2xl border p-5"
@@ -416,8 +513,11 @@ export default function DrumMachine() {
         <Sequencer
           instruments={INSTRUMENTS}
           seqState={seqState}
+          melodyState={melodyState}
           activeStep={activeStep}
+          selectedMelodyStep={selectedMelodyStep}
           onToggle={handleToggle}
+          onMelodyStepClick={handleMelodyStepClick}
         />
       </section>
 

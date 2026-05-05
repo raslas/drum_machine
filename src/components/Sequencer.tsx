@@ -1,12 +1,16 @@
 'use client'
 
 import type { Instrument } from '@/lib/instruments'
+import type { MelodyState } from '@/lib/melody'
 
 interface SequencerProps {
   instruments: Instrument[]
   seqState: boolean[][]
+  melodyState: MelodyState
   activeStep: number  // -1 when stopped
+  selectedMelodyStep: number
   onToggle: (instIdx: number, step: number) => void
+  onMelodyStepClick: (step: number) => void
 }
 
 const STEPS = 8
@@ -14,8 +18,11 @@ const STEPS = 8
 export default function Sequencer({
   instruments,
   seqState,
+  melodyState,
   activeStep,
+  selectedMelodyStep,
   onToggle,
+  onMelodyStepClick,
 }: SequencerProps) {
   return (
     <div className="overflow-x-auto">
@@ -88,6 +95,58 @@ export default function Sequencer({
             })}
           </div>
         ))}
+
+        <div className="flex items-center gap-0 pt-2 mt-1 border-t border-[#1a1a3a]">
+          <div
+            className="text-right text-[0.62rem] font-black uppercase tracking-wide pr-2 flex-shrink-0"
+            style={{ width: '88px', color: '#00ffcc' }}
+          >
+            Melody
+          </div>
+
+          {Array.from({ length: STEPS }, (_, s) => {
+            const note = melodyState[s]
+            const active = s === activeStep
+            const selected = activeStep < 0 && s === selectedMelodyStep
+
+            return (
+              <div key={s} className="flex items-center" style={{ flex: 1 }}>
+                {s === 4 && <div className="w-2 flex-shrink-0" />}
+
+                <button
+                  onClick={() => onMelodyStepClick(s)}
+                  className="rounded-md transition-all duration-75 cursor-pointer
+                             focus-visible:outline-none flex items-center justify-center overflow-hidden"
+                  style={{
+                    flex: 1,
+                    height: '34px',
+                    border: active
+                      ? '2px solid rgba(255,255,255,0.75)'
+                      : note
+                      ? '2px solid #00ffcc'
+                      : selected
+                      ? '1.5px solid #ff00ff'
+                      : '1.5px solid #1e1e3a',
+                    background: note
+                      ? 'linear-gradient(135deg, #00ffcc, #00aaff)'
+                      : active
+                      ? '#1e1e3a'
+                      : selected
+                      ? '#190e2a'
+                      : '#0e0e22',
+                    boxShadow: note ? '0 0 9px #00ffcc66' : selected ? '0 0 8px #ff00ff44' : 'none',
+                    color: note ? '#05050c' : selected ? '#ff00ff' : '#2a2a4a',
+                  }}
+                  title={note ? `Clear ${note}` : `Select step ${s + 1}`}
+                >
+                  <span className="text-[0.58rem] font-black tabular-nums leading-none">
+                    {note ?? '...'}
+                  </span>
+                </button>
+              </div>
+            )
+          })}
+        </div>
       </div>
     </div>
   )

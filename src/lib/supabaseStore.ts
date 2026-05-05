@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { SavedPattern, SongData } from './patternStore'
+import { normalizeSavedPattern, type SavedPattern, type SongData } from './patternStore'
 
 export async function fetchPatterns(userId: string): Promise<SavedPattern[]> {
   const { data, error } = await supabase
@@ -10,12 +10,16 @@ export async function fetchPatterns(userId: string): Promise<SavedPattern[]> {
 
   if (error) throw error
 
-  return (data ?? []).map(row => ({
-    id: row.id as string,
-    name: row.name as string,
-    bpm: row.bpm as number,
-    seqState: row.seq_state as boolean[][],
-  }))
+  return (data ?? [])
+    .map(row => normalizeSavedPattern({
+      id: row.id,
+      name: row.name,
+      bpm: row.bpm,
+      seqState: row.seq_state,
+      melodyState: row.melody_state,
+      synthWave: row.synth_wave,
+    }))
+    .filter((pattern): pattern is SavedPattern => pattern !== null)
 }
 
 export async function upsertPattern(userId: string, pattern: SavedPattern): Promise<void> {
@@ -25,6 +29,8 @@ export async function upsertPattern(userId: string, pattern: SavedPattern): Prom
     name: pattern.name,
     bpm: pattern.bpm,
     seq_state: pattern.seqState,
+    melody_state: pattern.melodyState,
+    synth_wave: pattern.synthWave,
     updated_at: new Date().toISOString(),
   })
   if (error) throw error

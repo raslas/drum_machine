@@ -3,11 +3,15 @@
 import { useEffect, useRef } from 'react'
 import type { MutableRefObject } from 'react'
 import { playSound } from '@/lib/sounds'
+import { playSynthNote } from '@/lib/synth'
 import type { Instrument } from '@/lib/instruments'
+import type { MelodyState, SynthWaveform } from '@/lib/melody'
 
 interface UseSequencerProps {
   ctxRef: MutableRefObject<AudioContext | null>
   seqStateRef: MutableRefObject<boolean[][]>
+  melodyStateRef: MutableRefObject<MelodyState>
+  synthWaveRef: MutableRefObject<SynthWaveform>
   bpmRef: MutableRefObject<number>
   instruments: Instrument[]
   isPlaying: boolean
@@ -21,6 +25,8 @@ const TICK_MS = 25
 export function useSequencer({
   ctxRef,
   seqStateRef,
+  melodyStateRef,
+  synthWaveRef,
   bpmRef,
   instruments,
   isPlaying,
@@ -58,6 +64,11 @@ export function useSequencer({
           }
         })
 
+        const melodyNote = melodyStateRef.current[step]
+        if (melodyNote) {
+          playSynthNote(melodyNote, synthWaveRef.current, ctx, t, secPerStep * 0.92)
+        }
+
         const msDelay = Math.max(0, (t - ctx.currentTime) * 1000 - 15)
         setTimeout(() => onStepRef.current(step), msDelay)
 
@@ -80,5 +91,5 @@ export function useSequencer({
       if (timerRef.current !== null) clearTimeout(timerRef.current)
       onStepRef.current(-1)
     }
-  }, [isPlaying, ctxRef, instruments, seqStateRef, bpmRef])
+  }, [isPlaying, ctxRef, instruments, seqStateRef, melodyStateRef, synthWaveRef, bpmRef])
 }
